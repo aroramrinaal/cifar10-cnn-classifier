@@ -22,68 +22,86 @@ class SimpleCNN(nn.Module):
     def forward(self, x):
         x = self.pool(self.relu(self.conv1(x)))
         x = self.pool(self.relu(self.conv2(x)))
-        x = x.view(-1, 64 * 8 * 8)
+        x = torch.flatten(x, 1) # safer flatten
         x = self.relu(self.fc1(x))
         x = self.fc2(x)
         return x
 
-# loading data
-transform = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-])
+def main():
+    # loading data
+    # better normalization + basic augmentation
+    train_transform = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    ])
 
-trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
-                                        download=True, transform=transform)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=64,
-                                          shuffle=True)
+    test_transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    ])
 
-testset = torchvision.datasets.CIFAR10(root='./data', train=False,
-                                       download=True, transform=transform)
-testloader = torch.utils.data.DataLoader(testset, batch_size=64,
-                                         shuffle=False)
+    # checking for cuda to set pin_memory
+    use_cuda = torch.cuda.is_available()
 
-# setup model, loss, optimizer
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = SimpleCNN().to(device)
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+    trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
+                                            download=True, transform=train_transform)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=64,
+                                              shuffle=True, num_workers=2, pin_memory=use_cuda)
 
-# training loop
-epochs = 10
-for epoch in range(epochs):
-    running_loss = 0.0
-    for i, data in enumerate(trainloader, 0):
-        inputs, labels = data
-        inputs, labels = inputs.to(device), labels.to(device)
-        
-        optimizer.zero_grad()
-        outputs = model(inputs)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
-        
-        running_loss += loss.item()
-        if i % 200 == 199:
-            print(f'epoch {epoch + 1}, batch {i + 1}, loss: {running_loss / 200:.3f}')
-            running_loss = 0.0
+    testset = torchvision.datasets.CIFAR10(root='./data', train=False,
+                                           download=True, transform=test_transform)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=64,
+                                             shuffle=False, num_workers=2, pin_memory=use_cuda)
 
-print('training done')
+    # setup model, loss, optimizer
+    device = torch.device("cuda" if use_cuda else "cpu")
+    print("device:", device)
 
-# testing
-correct = 0
-total = 0
-with torch.no_grad():
-    for data in testloader:
-        images, labels = data
-        images, labels = images.to(device), labels.to(device)
-        outputs = model(images)
-        _, predicted = torch.max(outputs.data, 1)
-        total += labels.size(0)
-        correct += (predicted == labels).sum().item()
+    model = SimpleCNN().to(device)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-print(f'accuracy on 10000 test images: {100 * correct / total:.2f}%')
+    # training loop
+    epochs = 10
+    for epoch in range(epochs):
+        model.train()
+        running_loss = 0.0
+
+        for i, (inputs, labels) in enumerate(trainloader):
+            inputs, labels = inputs.to(device), labels.to(device)
+
+            optimizer.zero_grad(set_to_none=True)
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+            running_loss += loss.item()
+            if i % 200 == 199:
+                print(f'epoch {epoch + 1}, batch {i + 1}, loss: {running_loss / 200:.3f}')
+                running_loss = 0.0
+
+    print('training done')
+
+    # testing
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for images, labels in testloader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            predicted = outputs.argmax(dim=1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+
+    print(f'accuracy on 10000 test images: {100 * correct / total:.2f}%')
 
 
-torch.save(model.state_dict(), 'cifar10_cnn.pth')
-print('model saved')
+    torch.save(model.state_dict(), 'cifar10_cnn.pth')
+    print('model saved')
+
+if __name__ == '__main__':
+    main()
